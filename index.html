@@ -71,10 +71,8 @@
 <script>
 // ── Config ─────────────────────────────────────────────────────────────────
 // Replace GITHUB_USER and REPO_NAME after you create the GitHub repo
-const GITHUB_USER = 'EpiCryptoDev';
-const REPO_NAME   = 'aster-live';
-const BRANCH      = 'main';
-const RAW         = `https://raw.githubusercontent.com/${GITHUB_USER}/${REPO_NAME}/${BRANCH}/state`;
+// State files served directly via GitHub Pages (no CORS issues)
+const RAW = 'https://epicryptodev.github.io/aster-live/state';
 const INITIAL_CAP = 1000;
 
 let chart = null;

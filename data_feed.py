@@ -1,8 +1,7 @@
 """
 Live 1H OHLCV data feed.
-Fetches from Binance public API (no key needed) as the primary source —
-Binance has the most reliable 1H BTC/USDT data and zero rate-limit issues
-for 60 candles/hour. Falls back to a second attempt on timeout.
+Fetches from Aster DEX public klines endpoint (no API key needed).
+Falls back to Binance if Aster is unreachable.
 """
 
 import logging
@@ -13,37 +12,43 @@ import pandas as pd
 
 log = logging.getLogger(__name__)
 
+SYMBOL   = "BTCUSDT"
+INTERVAL = "1h"
+WARMUP_BARS = 60
+
+ASTER_URL   = "https://sapi.asterdex.com/fapi/v1/klines"
 BINANCE_URL = "https://api.binance.com/api/v3/klines"
-SYMBOL      = "BTCUSDT"
-INTERVAL    = "1h"
-WARMUP_BARS = 60   # enough for ATR14, ADX14, EMA20, EMA200
 
 
 def fetch_candles(symbol: str = SYMBOL,
                   interval: str = INTERVAL,
                   limit: int = WARMUP_BARS) -> pd.DataFrame:
     """
-    Fetch the latest `limit` closed 1H candles from Binance.
-    Returns a DataFrame with columns: open, high, low, close, volume
-    Index: UTC DatetimeIndex (bar open time), sorted ascending.
-    The LAST row is the most recently CLOSED bar (current bar excluded).
+    Fetch the latest `limit` closed 1H candles.
+    Tries Aster DEX first, falls back to Binance.
+    Returns DataFrame with columns: open, high, low, close, volume.
+    Index: UTC DatetimeIndex sorted ascending. Last row = most recent closed bar.
     """
-    for attempt in range(3):
+    for source, url in [("Aster", ASTER_URL), ("Binance", BINANCE_URL)]:
         try:
             resp = requests.get(
-                BINANCE_URL,
+                url,
                 params={"symbol": symbol, "interval": interval, "limit": limit + 1},
                 timeout=10,
             )
             resp.raise_for_status()
             raw = resp.json()
-            break
-        except requests.RequestException as e:
-            log.warning("Binance fetch attempt %d failed: %s", attempt + 1, e)
-            if attempt == 2:
-                raise
-            time.sleep(2 ** attempt)
+            df  = _parse(raw)
+            log.info("[%s] Fetched %d closed 1H candles. Latest: %s close=%.2f",
+                     source, len(df), df.index[-1], df["close"].iloc[-1])
+            return df
+        except Exception as e:
+            log.warning("[%s] fetch failed: %s — trying next source.", source, e)
 
+    raise RuntimeError("All data sources failed. Cannot fetch candles.")
+
+
+def _parse(raw: list) -> pd.DataFrame:
     df = pd.DataFrame(raw, columns=[
         "open_time", "open", "high", "low", "close", "volume",
         "close_time", "quote_vol", "trades", "taker_buy_base",
@@ -53,10 +58,5 @@ def fetch_candles(symbol: str = SYMBOL,
     df.set_index("open_time", inplace=True)
     for col in ["open", "high", "low", "close", "volume"]:
         df[col] = df[col].astype(float)
-
-    # Drop the current (still-open) bar — only trade on closed bars
-    df = df.iloc[:-1]
-
-    log.info("Fetched %d closed 1H candles. Latest: %s close=%.2f",
-             len(df), df.index[-1], df['close'].iloc[-1])
-    return df[["open", "high", "low", "close", "volume"]]
+    # Drop the still-open current bar
+    return df.iloc[:-1][["open", "high", "low", "close", "volume"]]

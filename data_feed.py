@@ -1,7 +1,8 @@
 """
 Live 1H OHLCV data feed.
-Fetches from Aster DEX public klines endpoint (no API key needed).
-Falls back to Binance if Aster is unreachable.
+Primary:  Bybit public klines (no key, no geo-restriction)
+Fallback: Kraken public OHLC
+Both work from GitHub Actions (US servers).
 """
 
 import logging
@@ -12,51 +13,77 @@ import pandas as pd
 
 log = logging.getLogger(__name__)
 
-SYMBOL   = "BTCUSDT"
-INTERVAL = "1h"
 WARMUP_BARS = 60
 
-ASTER_URL   = "https://sapi.asterdex.com/fapi/v1/klines"
-BINANCE_URL = "https://api.binance.com/api/v3/klines"
 
-
-def fetch_candles(symbol: str = SYMBOL,
-                  interval: str = INTERVAL,
+def fetch_candles(symbol: str = "BTCUSDT",
+                  interval: str = "1h",
                   limit: int = WARMUP_BARS) -> pd.DataFrame:
     """
     Fetch the latest `limit` closed 1H candles.
-    Tries Aster DEX first, falls back to Binance.
-    Returns DataFrame with columns: open, high, low, close, volume.
-    Index: UTC DatetimeIndex sorted ascending. Last row = most recent closed bar.
+    Returns DataFrame: open, high, low, close, volume — UTC index ascending.
+    Last row = most recently closed bar.
     """
-    for source, url in [("Aster", ASTER_URL), ("Binance", BINANCE_URL)]:
+    for fn in [_fetch_bybit, _fetch_kraken]:
         try:
-            resp = requests.get(
-                url,
-                params={"symbol": symbol, "interval": interval, "limit": limit + 1},
-                timeout=10,
-            )
-            resp.raise_for_status()
-            raw = resp.json()
-            df  = _parse(raw)
-            log.info("[%s] Fetched %d closed 1H candles. Latest: %s close=%.2f",
-                     source, len(df), df.index[-1], df["close"].iloc[-1])
+            df = fn(limit + 1)   # +1 so we can drop the still-open bar
+            df = df.iloc[:-1]    # drop current (open) bar
+            log.info("Fetched %d closed 1H candles. Latest: %s  close=%.2f",
+                     len(df), df.index[-1], df["close"].iloc[-1])
             return df
         except Exception as e:
-            log.warning("[%s] fetch failed: %s — trying next source.", source, e)
+            log.warning("Source %s failed: %s — trying next.", fn.__name__, e)
 
     raise RuntimeError("All data sources failed. Cannot fetch candles.")
 
 
-def _parse(raw: list) -> pd.DataFrame:
-    df = pd.DataFrame(raw, columns=[
-        "open_time", "open", "high", "low", "close", "volume",
-        "close_time", "quote_vol", "trades", "taker_buy_base",
-        "taker_buy_quote", "ignore",
-    ])
-    df["open_time"] = pd.to_datetime(df["open_time"], unit="ms", utc=True)
-    df.set_index("open_time", inplace=True)
+# ── Bybit ──────────────────────────────────────────────────────────────────────
+
+def _fetch_bybit(limit: int) -> pd.DataFrame:
+    resp = requests.get(
+        "https://api.bybit.com/v5/market/kline",
+        params={
+            "category": "linear",
+            "symbol":   "BTCUSDT",
+            "interval": "60",       # 60 minutes = 1H
+            "limit":    limit,
+        },
+        timeout=10,
+    )
+    resp.raise_for_status()
+    data = resp.json()
+    if data.get("retCode") != 0:
+        raise ValueError(f"Bybit error: {data.get('retMsg')}")
+
+    # Bybit returns newest-first: [[startTime, open, high, low, close, volume, ...], ...]
+    rows = data["result"]["list"]
+    df = pd.DataFrame(rows, columns=["ts", "open", "high", "low", "close", "volume", "turnover"])
+    df["ts"]   = pd.to_datetime(df["ts"].astype(float), unit="ms", utc=True)
+    df = df.set_index("ts").sort_index()   # sort ascending
     for col in ["open", "high", "low", "close", "volume"]:
         df[col] = df[col].astype(float)
-    # Drop the still-open current bar
-    return df.iloc[:-1][["open", "high", "low", "close", "volume"]]
+    return df[["open", "high", "low", "close", "volume"]]
+
+
+# ── Kraken (fallback) ──────────────────────────────────────────────────────────
+
+def _fetch_kraken(limit: int) -> pd.DataFrame:
+    resp = requests.get(
+        "https://api.kraken.com/0/public/OHLC",
+        params={"pair": "XBTUSDT", "interval": 60},
+        timeout=10,
+    )
+    resp.raise_for_status()
+    data = resp.json()
+    if data.get("error"):
+        raise ValueError(f"Kraken error: {data['error']}")
+
+    rows = data["result"]["XBTUSDT"]
+    df = pd.DataFrame(rows, columns=[
+        "ts", "open", "high", "low", "close", "vwap", "volume", "count"
+    ])
+    df["ts"] = pd.to_datetime(df["ts"].astype(int), unit="s", utc=True)
+    df = df.set_index("ts").sort_index().tail(limit)
+    for col in ["open", "high", "low", "close", "volume"]:
+        df[col] = df[col].astype(float)
+    return df[["open", "high", "low", "close", "volume"]]

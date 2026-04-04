@@ -1,0 +1,204 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Aster Bot — S6g9 Dashboard</title>
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
+  <style>
+    *{box-sizing:border-box;margin:0;padding:0}
+    body{font-family:'Segoe UI',sans-serif;background:#0f1117;color:#e0e0e0;padding:24px}
+    h1{font-size:1.4rem;color:#fff;margin-bottom:20px;display:flex;align-items:center;gap:12px}
+    .badge{display:inline-block;padding:3px 10px;border-radius:12px;font-size:.75rem;font-weight:600}
+    .badge-paper{background:#f59e0b22;color:#f59e0b;border:1px solid #f59e0b55}
+    .badge-live{background:#10b98122;color:#10b981;border:1px solid #10b98155}
+    .grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(170px,1fr));gap:16px;margin-bottom:24px}
+    .card{background:#1a1d27;border:1px solid #2a2d3a;border-radius:12px;padding:18px}
+    .card .label{font-size:.75rem;color:#888;text-transform:uppercase;letter-spacing:.05em;margin-bottom:6px}
+    .card .value{font-size:1.5rem;font-weight:700}
+    .pos{color:#10b981}.neg{color:#ef4444}.neu{color:#e0e0e0}
+    .section{background:#1a1d27;border:1px solid #2a2d3a;border-radius:12px;padding:20px;margin-bottom:24px}
+    .section h2{font-size:.85rem;color:#aaa;text-transform:uppercase;letter-spacing:.06em;margin-bottom:16px}
+    canvas{max-height:260px}
+    table{width:100%;border-collapse:collapse;font-size:.82rem}
+    th{text-align:left;color:#666;font-weight:600;padding:6px 10px;border-bottom:1px solid #2a2d3a}
+    td{padding:7px 10px;border-bottom:1px solid #1e2130}
+    tr:last-child td{border-bottom:none}
+    .pos-open{background:#1e3a2e;border:1px solid #10b98133;border-radius:10px;padding:14px 18px;margin-bottom:24px}
+    .pos-open h2{font-size:.85rem;color:#10b981;margin-bottom:10px;text-transform:uppercase;letter-spacing:.06em}
+    .pos-open .row{display:flex;gap:24px;flex-wrap:wrap}
+    .pos-open .item .k{font-size:.72rem;color:#888}
+    .pos-open .item .v{font-size:1rem;font-weight:600}
+    .pos-flat{background:#1a1d27;border:1px solid #2a2d3a;border-radius:10px;padding:12px 18px;margin-bottom:24px;color:#555;font-size:.9rem}
+    .updated{font-size:.72rem;color:#444;margin-top:4px}
+    a{color:#6366f1;text-decoration:none}
+  </style>
+</head>
+<body>
+
+<h1>
+  Aster Bot &mdash; V5c S6g9
+  <span id="badge" class="badge badge-paper">PAPER</span>
+  <span class="updated" id="last-updated"></span>
+</h1>
+
+<div class="grid">
+  <div class="card"><div class="label">Equity</div><div class="value neu" id="equity">—</div></div>
+  <div class="card"><div class="label">Total P&amp;L</div><div class="value" id="total-pnl">—</div></div>
+  <div class="card"><div class="label">Win Rate</div><div class="value neu" id="wr">—</div></div>
+  <div class="card"><div class="label">Total Trades</div><div class="value neu" id="n-trades">—</div></div>
+  <div class="card"><div class="label">Avg P&amp;L / Trade</div><div class="value" id="avg-pnl">—</div></div>
+</div>
+
+<div id="pos-block"></div>
+
+<div class="section">
+  <h2>Equity Curve</h2>
+  <canvas id="equityChart"></canvas>
+</div>
+
+<div class="section">
+  <h2>Recent Trades</h2>
+  <table>
+    <thead><tr>
+      <th>Exit Time (UTC)</th><th>Dir</th><th>Entry</th><th>Exit</th>
+      <th>P&amp;L $</th><th>P&amp;L %</th><th>Reason</th><th>Bars</th>
+    </tr></thead>
+    <tbody id="trades-body"></tbody>
+  </table>
+</div>
+
+<script>
+// ── Config ─────────────────────────────────────────────────────────────────
+// Replace GITHUB_USER and REPO_NAME after you create the GitHub repo
+const GITHUB_USER = 'GITHUB_USER';
+const REPO_NAME   = 'aster-live';
+const BRANCH      = 'main';
+const RAW         = `https://raw.githubusercontent.com/${GITHUB_USER}/${REPO_NAME}/${BRANCH}/state`;
+const INITIAL_CAP = 1000;
+
+let chart = null;
+
+async function fetchJSON(file) {
+  const r = await fetch(`${RAW}/${file}?cb=${Date.now()}`);
+  if (!r.ok) throw new Error(`${file}: ${r.status}`);
+  return r.json();
+}
+
+async function load() {
+  try {
+    const [position, trades, equity] = await Promise.all([
+      fetchJSON('position.json'),
+      fetchJSON('trades.json'),
+      fetchJSON('equity.json'),
+    ]);
+
+    // Last updated
+    document.getElementById('last-updated').textContent =
+      'Last refresh: ' + new Date().toUTCString();
+
+    // Equity
+    const latestEq = equity.length ? equity[equity.length-1].equity : INITIAL_CAP;
+    document.getElementById('equity').textContent = '$' + latestEq.toFixed(2);
+
+    // Trade stats
+    const totalPnl = trades.reduce((s,t) => s + (t.pnl||0), 0);
+    const wins     = trades.filter(t => t.pnl > 0).length;
+    const wr       = trades.length ? (wins/trades.length*100).toFixed(1) : '—';
+    const avgPnl   = trades.length ? totalPnl/trades.length : 0;
+
+    const pnlEl = document.getElementById('total-pnl');
+    pnlEl.textContent = (totalPnl>=0?'+':'') + '$' + totalPnl.toFixed(2);
+    pnlEl.className   = 'value ' + (totalPnl>=0?'pos':'neg');
+
+    document.getElementById('wr').textContent       = wr + '%';
+    document.getElementById('n-trades').textContent = trades.length;
+
+    const avgEl = document.getElementById('avg-pnl');
+    avgEl.textContent = (avgPnl>=0?'+':'') + '$' + avgPnl.toFixed(4);
+    avgEl.className   = 'value ' + (avgPnl>=0?'pos':'neg');
+
+    // Open position block
+    const posBlock = document.getElementById('pos-block');
+    if (position && position.open) {
+      const p   = position;
+      const dir = p.direction === 1 ? 'LONG 🟢' : 'SHORT 🔴';
+      posBlock.innerHTML = `
+        <div class="pos-open">
+          <h2>&#9679; Open Position — ${dir}</h2>
+          <div class="row">
+            <div class="item"><div class="k">Entry</div><div class="v">$${p.entry_price?.toFixed(2)}</div></div>
+            <div class="item"><div class="k">SL</div><div class="v neg">$${p.sl?.toFixed(2)}</div></div>
+            <div class="item"><div class="k">TP</div><div class="v pos">$${p.tp?.toFixed(2)}</div></div>
+            <div class="item"><div class="k">Qty</div><div class="v">${p.qty} BTC</div></div>
+            <div class="item"><div class="k">Notional</div><div class="v">$${p.notional?.toFixed(2)}</div></div>
+            <div class="item"><div class="k">Bars Held</div><div class="v">${p.bars_held} / 48</div></div>
+            <div class="item"><div class="k">Margin</div><div class="v">${p.margin_pct}%</div></div>
+            <div class="item"><div class="k">Since</div><div class="v">${p.entry_time?.slice(0,16).replace('T',' ')} UTC</div></div>
+          </div>
+        </div>`;
+    } else {
+      posBlock.innerHTML =
+        '<div class="pos-flat">No open position — watching for S6g9 signal every hour.</div>';
+    }
+
+    // Equity chart
+    if (equity.length > 1) {
+      const labels = equity.map(e => e.ts?.slice(5,16).replace('T',' '));
+      const values = equity.map(e => e.equity);
+      if (chart) chart.destroy();
+      chart = new Chart(document.getElementById('equityChart'), {
+        type: 'line',
+        data: {
+          labels,
+          datasets: [{
+            label: 'Equity ($)',
+            data: values,
+            borderColor: '#10b981',
+            backgroundColor: 'rgba(16,185,129,0.08)',
+            borderWidth: 1.5,
+            pointRadius: 0,
+            fill: true,
+            tension: 0.3,
+          }]
+        },
+        options: {
+          responsive: true,
+          plugins: {legend:{display:false}},
+          scales: {
+            x: {ticks:{color:'#555',maxTicksLimit:10},grid:{color:'#1e2130'}},
+            y: {ticks:{color:'#555',callback:v=>'$'+v.toFixed(0)},grid:{color:'#1e2130'}},
+          }
+        }
+      });
+    }
+
+    // Trades table (newest first)
+    const tbody = document.getElementById('trades-body');
+    tbody.innerHTML = [...trades].reverse().slice(0,30).map(t => {
+      const pc = t.pnl>=0?'pos':'neg';
+      const ps = t.pnl>=0?'+':'';
+      return `<tr>
+        <td>${(t.exit_time||'').slice(0,16).replace('T',' ')}</td>
+        <td>${t.direction}</td>
+        <td>$${(t.entry_price||0).toFixed(2)}</td>
+        <td>$${(t.exit_price||0).toFixed(2)}</td>
+        <td class="${pc}">${ps}$${(t.pnl||0).toFixed(4)}</td>
+        <td class="${pc}">${ps}${(t.pnl_pct||0).toFixed(3)}%</td>
+        <td>${t.exit_reason||''}</td>
+        <td>${t.bars_held||''}</td>
+      </tr>`;
+    }).join('');
+
+  } catch(e) {
+    console.error('Load error:', e);
+    document.getElementById('last-updated').textContent =
+      'Error loading data — ' + e.message;
+  }
+}
+
+load();
+setInterval(load, 300_000); // refresh every 5 min
+</script>
+</body>
+</html>

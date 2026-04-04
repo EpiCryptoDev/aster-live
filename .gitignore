@@ -1,0 +1,20 @@
+# NEVER commit these
+.env
+*.key
+serviceAccountKey.json
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+.pytest_cache/
+
+# Local dev
+.venv/
+venv/
+
+# Firebase leftovers (no longer used)
+.firebase/
+firebase.json
+.firebaserc
+dashboard/app.py

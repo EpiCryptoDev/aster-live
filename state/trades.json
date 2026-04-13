@@ -46,5 +46,21 @@
     "exit_reason": "SL",
     "bars_held": 4,
     "logged_at": "2026-04-12T02:47:30.521283+00:00"
+  },
+  {
+    "entry_time": "2026-04-12T05:25:54.665873+00:00",
+    "exit_time": "2026-04-13T15:23:42.122290+00:00",
+    "direction": "SHORT",
+    "entry_price": 71470.9,
+    "exit_price": 72133.45,
+    "qty": 0.0035,
+    "notional": 250.0,
+    "sl": 72133.45,
+    "tp": 70145.8,
+    "pnl": -2.5083,
+    "pnl_pct": -1.003,
+    "exit_reason": "SL",
+    "bars_held": 23,
+    "logged_at": "2026-04-13T15:23:42.383000+00:00"
   }
 ]
